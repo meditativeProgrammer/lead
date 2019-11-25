@@ -1,0 +1,243 @@
+# ST JOSEPH COUNTY #
+
+#################
+# LOAD PACKAGES #
+################
+library(shiny)
+library(leaflet)
+library(tigris)
+library(dplyr)
+library(shinythemes)
+
+####################
+# GET SPATIAL DATA #
+####################
+counties <- 141
+lnd <- tracts(state="IN", county=141, cb=TRUE)
+def <- tracts(state="IN", county=141, cb=TRUE)
+
+
+############################
+# READ EXCEL TABULAR DATA #
+###########################
+data <- read.csv("finaltable.csv", header=TRUE)
+data$NAME <- gsub(", St. Joseph County, Indiana", "\\1", data$NAME) #Remove the extra bit at the end
+data$GEOID <- as.character(data$GEOID) #Convert GEOID in data to Character so it may merge
+lnd@data <- left_join(lnd@data, data, by = 'GEOID') #Merge data
+
+datadata <- data #make a 2nd copy for data table
+datadata$X.1 <- NULL
+datadata$X.2 <- NULL
+datadata$X <- NULL
+datadata$GEOID <- NULL
+  
+  
+  
+datadata <- rename(datadata, 'Pre-1950 Housing'=X1950)
+datadata <- rename(datadata, 'Pre-1960 Housing'=X1960)
+datadata <- rename(datadata, 'Black Population'=black)
+datadata <- rename(datadata, 'Hispanic Population'=hispanic)
+datadata <- rename(datadata, 'Attained HS Diploma'=hs)
+datadata <- rename(datadata, 'Below Poverty Line'=poverty)
+datadata <- rename(datadata, 'Housing Renter Occupied Units'=renter)
+datadata <- rename(datadata, 'Median Year Housing Built'=year)
+datadata <- rename(datadata, 'Median Household Income'=income)
+datadata <- rename(datadata, 'Census Tract'=NAME)
+datadata <- rename(datadata, 'Predicted Blood-Lead Level'=BLL)
+
+
+
+
+
+#########################
+# CREATE LEAFLET POPUPS #
+#########################
+popup <- paste0("<center>","<strong>", toupper(lnd$NAME.y), "</strong>","</center>",
+                "<center>","<strong>","<code>","Predicted BLL: ",lnd$BLL," mug/dL","</code>","</strong>","</center>",
+                "<br>","Population Below Poverty Line: ","<strong>", round(lnd$poverty,2),"%","</strong>",
+                "<br>","Pre-1960 Housing: ","<strong>",round(lnd$X1960,3),"%","</strong>",
+                "<br>","Black Population: ","<strong>",round(lnd$black,2),"%","</strong>",
+                "<br>",
+                "<br>","Hispanic Population: ","<strong>", round(lnd$hispanic,2),"%","</strong>",
+                "<br>","High School Diploma Attainment: ", "<strong>",round(lnd$hs,2),"%","</strong>",
+                "<br>","Housing Renter Occupied Units: ","<strong>", round(lnd$renter,2),"%","</strong>",
+                "<br>","Pre-1950 Housing: ","<strong>", round(lnd$X1950,3),"%","</strong>",
+                "<br>","Median Household Income: ","<strong>","$", format(round(lnd$income,2),
+                                                                          big.mark=",", scientific=FALSE),"</strong>",
+                "<br>","Median Year Housing Buit: ","<strong>", round(lnd$year,2),"</strong>")
+
+########################
+# CREATE LEAFLET COLOR #
+########################
+palBLL <- colorNumeric(palette = "Reds", domain = lnd$BLL)
+palB <- colorNumeric(palette = "Reds", domain = lnd$black)
+palH <- colorNumeric(palette = "Reds", domain = lnd$hispanic)
+palHS <- colorNumeric(palette = "Reds", domain = lnd$hs, reverse = TRUE)
+palR <- colorNumeric(palette = "Reds", domain = lnd$renter)
+pal5 <- colorNumeric(palette = "Reds", domain = lnd$X1950)
+pal6 <- colorNumeric(palette = "Reds", domain = lnd$X1960)
+palI <- colorNumeric(palette = "Reds", domain = lnd$income)
+palY <- colorNumeric(palette = "Reds", domain = lnd$year) #reverse = TRUE
+palP <- colorNumeric(palette = "Reds", domain = lnd$poverty)
+
+################
+# WRITE SHINY #
+###############
+ui <- shinyUI(navbarPage("",
+                         tabPanel("Map",
+                                  h3("Are Your Children At Risk for Being Exposed to Lead Poisoning?",align = "center"),
+                                  h4("Predicting Blood Lead Levels Among Children in St. Joseph County, Indiana",align = "center"),
+                                  br(),
+                                  sidebarLayout(position = "right",
+                                                
+                                                sidebarPanel( 
+                                                  radioButtons("variable", "Choose a variable: ",c("Predicted Blood-Lead Level" = "bll",
+                                                                                                   "Black Population" = "black",
+                                                                                                   "Hispanic Population" = "hispanic",
+                                                                                                   "High School Diploma Attainment" = "hs",
+                                                                                                   "Housing Renter Occupied Units" = "renter",
+                                                                                                   "Pre-1950 Housing" = "1950",
+                                                                                                   "Pre-1960 Housing" = "1960",
+                                                                                                   "Median Household Income" = "income",
+                                                                                                   "Median Year Housing Buit" = "year",
+                                                                                                   "Population Below Poverty Line" = "poverty",
+                                                                                                   "Census Tract Map"="none"
+                                                  )),
+                                                  hr(),
+                                                  tags$h5("Created by Elijah Silva",align = "center"),
+                                                  tags$br(),
+                                                  tags$h6("University of Notre Dame",align = "center"),
+                                                  tags$h6("Master of Science in Global Health",align = "center"),
+                                                  tags$h6(a(href="https://www.linkedin.com/in/elijahsilva/","LinkedIn"),align = "center")
+                                                ),
+                                                mainPanel(
+                                                  leafletOutput("map"),
+                                                  h5("What is this application?", align="center"),
+                                                  helpText("This application is designed to predict the blood-lead levels among children residing in St. Joseph County, Indiana. 
+                                                           Using a regression model, the childhood lead exposure was estimated for every census tract in the county.", align = "center"),
+                                                  helpText("Click on any census tract to view a summary containing the predicted BLL and socioeconomic data.", align = "center")#fluidPage(theme = shinytheme("readable"),
+                                                )
+                                  )
+                         ),
+                         tabPanel("Data",
+                                  dataTableOutput("data1")
+                         ),
+                         navbarMenu("More Info",
+                                    tabPanel("Methodology",
+                                             tags$p("A regression model created by Bradley et al (2017) was used to estimate childhood lead exposure. 
+                                                    The model uses three predictors “Percentage of population below poverty,” “Percentage of pre-1960 housing,” 
+                                                    and “Percentage of population that is non-Hispanic Black”.")
+                                             
+                                    )
+                                    
+                         )
+))
+
+server <- function(input, output) {
+  output$data1 <- renderDataTable(datadata)
+  output$map <- renderLeaflet({
+    leaflet() %>%
+      addPolygons(data=def) %>%
+    clearShapes()
+  })
+  observe({
+    if (input$variable == "bll"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palBLL(BLL)) %>%
+        addLegend("bottomright", title = "Predicted BLL", pal = palBLL, values = ~lnd$BLL, opacity = 1,
+                  labFormat = labelFormat(suffix = " mug/dL"))
+    }
+    if (input$variable == "none"){
+      leafletProxy("map", data=def) %>%
+        clearShapes() %>%
+        addPolygons(data=def, stroke=TRUE, weight=1, fillOpacity = 0.001,smoothFactor = 0, popup=popup) %>%
+        clearControls()
+    }
+    if (input$variable == "black"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palB(black)) %>%
+        addLegend("bottomright", title = "Black Population", pal = palB, values = ~lnd$black, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "hispanic"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palH(hispanic)) %>%
+        addLegend("bottomright", title = "Hispanic Population", pal = palH, values = ~lnd$hispanic, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "hs"){ 
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palHS(hs)) %>%
+        addLegend("bottomright", title = "Attained High School Diploma", pal = palHS, values = ~lnd$hs, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "renter"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palR(renter)) %>%
+        addLegend("bottomright", title = "Housing Renter Occupied Units", pal = palR, values = ~lnd$renter, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "1950"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~pal5(X1950)) %>%
+        addLegend("bottomright", title = "Pre-1950 Housing", pal = pal5, values = ~lnd$X1950, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "1960"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~pal6(X1960)) %>%
+        addLegend("bottomright", title = "Pre-1960 Housing", pal = pal6, values = ~lnd$X1960, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+    if (input$variable == "income"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palI(income)) %>%
+        addLegend("bottomright", title = "Median Household Income", pal = palI, values = ~lnd$income, opacity = 1,
+                  labFormat = labelFormat(prefix = "$"))
+    }
+    if (input$variable == "year"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palY(year)) %>%
+        addLegend("bottomright", title = "Median Year Housing Built", pal = palY, values = lnd$year, opacity = 1, 
+                  labFormat = labelFormat(big.mark = ""))
+    }
+    if (input$variable == "poverty"){
+      leafletProxy("map", data=lnd) %>%
+        clearControls() %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addPolygons(stroke = FALSE, smoothFactor = 0.2, fillOpacity = 1, popup = popup,
+                    color = ~palP(poverty)) %>%
+        addLegend("bottomright", title = "Population Below Poverty Line", pal = palP, values = ~lnd$poverty, opacity = 1,
+                  labFormat = labelFormat(suffix = "%"))
+    }
+  })
+}
+
+shinyApp(ui, server)
