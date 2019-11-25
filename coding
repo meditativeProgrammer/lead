@@ -1,0 +1,459 @@
+################
+# PRELIM TASKS #
+################
+rm(list=ls(all=TRUE)) #Clear previous memory
+setwd("/Users/elijahsilva/R/Regression") #Set working drive
+
+############
+# PACKAGES #
+ ##########
+packages<- c("nortest","caret","stats","lubridate","car","glmnet","ggplot2","tidycensus","acs","dplyr") # list the packages that you'll need
+lapply(packages, require, character.only=T) # load the packages, if they don't load you might need to install them first
+
+
+ #############
+# IMPORT DATA #
+ #############
+lead.data <- read.csv("Lead_Data.csv", stringsAsFactors = F)
+lead.frame <- lead.data
+
+ ####################
+# LOAD ACS VARIABLES #
+ ####################
+acs.variables <- load_variables(2015, "acs5", cache=TRUE) # view all variables
+highschool.data <- read.csv("highschool.csv", header=TRUE)
+poverty.data <- read.csv("income_long.csv", header=TRUE)
+
+ ##########################
+# CONVERT INTO PERCENTAGES #
+ ##########################
+highschool.data <- transmute(highschool.data, Geo_GEOID, Geo_NAME, 'hs'= round((SE_T150_003/SE_T025_001),4))
+poverty.data <-transmute(poverty.data, Geo_GEOID, Geo_NAME, 'poverty'=(round
+                                                     ((poverty.data$SE_T114_002+poverty.data$SE_T115_002+poverty.data$SE_T116_002)/
+                                                         (poverty.data$SE_T114_001+poverty.data$SE_T115_001+poverty.data$SE_T116_001),4)))
+poverty.data$NAME <- poverty.data$Geo_NAME
+poverty.data$Geo_NAME <- NULL
+poverty.data$GEOID <- poverty.data$Geo_GEOID
+poverty.data$Geo_GEOID <- NULL
+
+highschool.data$NAME <- highschool.data$Geo_NAME
+highschool.data$Geo_NAME <- NULL
+highschool.data$GEOID <- highschool.data$Geo_GEOID
+highschool.data$Geo_GEOID <- NULL
+
+
+################
+# GET ACS DATA #
+################
+medincome <- get_acs(geography="tract", variables = "B19013A_001E",year=2015,output="tidy", state="IN", county=141)
+totalpop <- get_acs(geography="tract", variables = "B01003_001E",year=2015,output="tidy", state="IN", county=141)
+houserent <- get_acs(geography="tract", variables = "B07013_003E",year=2015,output="tidy", state="IN", county=141)
+housebuilt <- get_acs(geography="tract", variables = "B25035_001E",year=2015,output="tidy", state="IN", county=141)
+blackpop <- get_acs(geography="tract", variables = "B02001_003E",year=2015,output="tidy", state="IN", county=141)
+hisppop <- get_acs(geography="tract", variables = "B03001_003E",year=2015,output="tidy", state="IN", county=141)
+totalhouseyear <- get_acs(geography="tract", variables = "B25034_001E",year=2015,output="tidy", state="IN", county=141)
+house50_59<- get_acs(geography="tract", variables = "B25034_009E",year=2015,output="tidy", state="IN", county=141)
+house40_49<- get_acs(geography="tract", variables = "B25034_010E",year=2015,output="tidy", state="IN", county=141)
+house39_ <- get_acs(geography="tract", variables = "B25034_011E",year=2015,output="tidy", state="IN", county=141)
+
+####################################################
+# REMOVE MOE & VARIABLE AND CONVERT TO PERCENTAGES #
+####################################################
+blackpop <- transmute(blackpop, GEOID, NAME, 'Black' = round(estimate/totalpop$estimate,4))
+hisppop <- transmute(hisppop, GEOID, NAME, 'Hispanic' = round(estimate/totalpop$estimate,4))
+houserent <- transmute(houserent, GEOID, NAME, 'Rent' = round(estimate/totalpop$estimate,4))
+house50_ <- transmute(totalhouseyear, GEOID, NAME, '1950' = round((house39_$estimate+house40_49$estimate)/totalhouseyear$estimate,4))
+house60_ <- transmute(totalhouseyear, GEOID, NAME, '1960' = round((house39_$estimate+house40_49$estimate+house50_59$estimate)/totalhouseyear$estimate,4))
+medincome <- transmute(medincome, GEOID, NAME, 'Income' = estimate)
+housebuilt <- transmute(housebuilt, GEOID, NAME, 'YearBuilt' = estimate)
+
+###########################
+# CREATE CENSUS DATATABLE #
+###########################
+census.data <- transmute(blackpop, GEOID, NAME, 'black' = blackpop$'Black',
+                   'hispanic' = hisppop$'Hispanic',
+                   'hs' = highschool.data$'hs',
+                   'renter' = houserent$'Rent',
+                   'X1950' = house50_$'1950',
+                   'X1960' = house60_$'1960',
+                   'income' = medincome$'Income',
+                   'yearbuilt' = housebuilt$'YearBuilt',
+                   'poverty' = poverty.data$'poverty'
+                   )
+
+#################
+# CLEAN UP DATA #
+#################
+lead.data$monthSample <- month(as.Date(lead.data$SPEC_DT, format = "%m/%d/%Y"))
+lead.data$yearSample <- year(as.Date(lead.data$SPEC_DT, format = "%m/%d/%Y"))
+lead.data$real_spec <- as.Date(lead.data$SPEC_DT, format = "%m/%d/%Y")
+lead.data$real_dob <- as.Date(lead.data$DOB, format = "%m/%d/%Y")
+lead.data$age <- (lead.data$real_spec- lead.data$real_dob)/365
+#Toss unnedded values
+lead.data <- lead.data[which (lead.data$code != "Postal" & lead.data$code != "Locality"),]
+lead.data$sample_type <- lead.data$SAMPLE_TYPE_TEXT
+
+#######################
+# FILTER AGE CRITERIA #
+#######################
+lead.data$age <- as.numeric(lead.data$age) #Had to change from class to numeric
+lead.data$age <- lead.data$age*12
+
+###########################
+# MAKE INDIVIDUAL DATASET #
+###########################
+individuals <- TRUE
+if (individuals){
+  labe <- "Individuals"
+}else{
+  labe <- "Tests"
+}
+if (individuals){
+  lead.ind <- lead.data %>%
+    group_by(UniqueID) %>%
+    arrange(real_spec) %>%
+    slice(1L)
+  lead.ind <-data.frame(lead.ind)
+}
+
+#####################
+# TIDY LEAD DATASET #
+#####################
+lead.ind <- select(lead.ind, GEO_ID, 
+                     PB_RESULT, MEDICAID, SEX, sample_type, spec_year, monthSample, age) #Extract only variabels I am interested in
+
+###########################
+# TIDY GLOBAL ENVIRONMENT #
+###########################
+rm(house39_, house40_49, house50_59, housebuilt, houserent, medincome, totalhouseyear, totalpop, blackpop, hisppop, house50_, house60_,
+   poverty.data, acs.variables, highschool.data, lead.data)
+
+census.data$GEO_ID <- census.data$GEOID
+census.data$GEOID <- NULL
+census.data$GEO_ID <- paste("1400000US",census.data$GEO_ID,sep="")
+lead.ind <- dplyr::mutate(lead.ind, PB = PB_RESULT)
+
+#Age Filter
+lead.ind <- subset(lead.ind, PB < 100)
+lead.ind <- subset(lead.ind, age > 6 & age < 30)
+
+#Sample Type
+summary(lead.ind$sample_type == "Unknown")
+lead.ind <- lead.ind[-which(lead.ind$sample_type == "Unknown"), ]
+lead.ind$sample_type[lead.ind$sample_type=="Capillary"] <- 2
+lead.ind$sample_type[lead.ind$sample_type=="Venous"] <- 1
+lead.ind$sample_type <- as.numeric(lead.ind$sample_type)
+
+#monthSin & monthCos
+lead.ind <- dplyr::mutate(lead.ind, monthCos = monthSample)
+lead.ind <- dplyr::mutate(lead.ind, monthSin = monthSample)
+#lead.ind$monthSample <- NULL
+lead.ind$monthCos <- cos(lead.ind$monthCos)
+lead.ind$monthSin <- sin(lead.ind$monthSin)
+
+#Readjust Spec_Year
+lead.ind$spec_year[lead.ind$spec_year==2005] <- 1
+lead.ind$spec_year[lead.ind$spec_year==2006] <- 2
+lead.ind$spec_year[lead.ind$spec_year==2007] <- 3
+lead.ind$spec_year[lead.ind$spec_year==2008] <- 4
+lead.ind$spec_year[lead.ind$spec_year==2009] <- 5
+lead.ind$spec_year[lead.ind$spec_year==2010] <- 6
+lead.ind$spec_year[lead.ind$spec_year==2011] <- 7
+lead.ind$spec_year[lead.ind$spec_year==2012] <- 8
+lead.ind$spec_year[lead.ind$spec_year==2013] <- 9
+lead.ind$spec_year[lead.ind$spec_year==2014] <- 10
+lead.ind$spec_year[lead.ind$spec_year==2015] <- 11
+
+#Log Depedent Variable (PB Result)
+lead.ind$PB[lead.ind$PB == 0] <- 1 #Change all values from 0 to 1, as accordance with paper
+lead.ind$PB <- log(lead.ind$PB)
+lead.ind$PB_RESULT <- NULL
+lead.ind$spec_year <- as.numeric(lead.ind$spec_year)
+
+#Remove census tracts 6, 19 and 30
+census.data <- census.data[-c(7, 19, 30), ]
+
+###################################
+# MERGE CENSUS DATA AND LEAD DATA #
+###################################
+final.data <- merge(census.data,lead.ind, by="GEO_ID")
+
+######################## REGRESSION DIAGNOSTICS #############################
+
+##################
+# T-TEST STATISTIC
+final.data <- dplyr::select(final.data,
+                            PB, black, hs, hispanic, renter, X1950, X1960, 
+                            poverty, yearbuilt, income, spec_year, 
+                            sample_type, monthSin, monthCos, age)
+model.1 <- lm(PB~.,
+              data= final.data)
+summary(model.1)
+
+model.2 <- lm(PB~black+hs+X1950+X1960+poverty+spec_year+sample_type+age,
+              data= final.data)
+summary(model.2)
+
+
+
+####################
+# ASSUMPTION TESTS #
+####################
+
+###########################
+# VARIANCE INFLATION FACTOR
+vif(model.2)
+
+####################
+# DURBIN-WATSON TEST
+dwt(model.2) #Value of 2 represents no auto-correlation
+
+#######################
+# ANDERSON-DARLING TEST
+ad.test(final.data$black)
+ad.test(final.data$hs)
+ad.test(final.data$X1950)
+ad.test(final.data$X1960)
+ad.test(final.data$poverty)
+ad.test(final.data$sample_type)
+ad.test(final.data$spec_year)
+ad.test(final.data$monthSin)
+ad.test(final.data$age)
+
+############################ GRAPHING THE GRAPHS ##############################
+
+########################
+# YEAR VS TESTS
+colnames(countsYear)[colnames(countsYear) == 'Var1'] <- 'spec_year'
+countsYear$spec_year <- as.numeric(countsYear$spec_year)
+countsYear$Freq <- as.numeric(countsYear$Freq)
+year.data <- merge(final.data.year,countsYear, by="spec_year")
+
+YearLab <- c("2005","2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+
+p.two.axis <- ggplot(data=year.data, aes(x = spec_year))+
+  geom_bar(stat="identity", aes(y=Freq/400))+ 
+  geom_line(aes(y = PB, colour = "Mean BLL"),size=1.5 )+
+  scale_y_continuous(sec.axis = sec_axis(~.*400, name = "Number of Tests"))+
+  scale_x_continuous(labels = YearLab, breaks = round(seq(min(year.data$spec_year), max(year.data$spec_year), by = 1),1)) +
+  labs(y = "Mean BLL (in μg/dL)",
+       x = "Year",
+       colour = "Legend")
+p.two.axis
+
+##########################
+# CENSUS TRACT PREDICTIONS
+actual <- aggregate(final.data[, 18], list(final.data$NAME), mean)
+actual$x <- exp(actual$x)
+actual$PB_act <- actual$x
+actual$x <- NULL
+
+census <- dplyr::select(final.data,
+                             NAME, black, hs, X1950, X1960, 
+                             poverty, spec_year, 
+                             sample_type, monthSin, age)
+
+predict <- aggregate(census[, 2:10], list(census$NAME), mean)
+predict.values <- 0.774944 + 0.404310*(predict$black) - 0.336107*(predict$hs) + 0.551458*(predict$X1950) - 0.115826*(predict$X1960) - 0.195828*(predict$poverty) - 0.042680*(predict$spec_year) + 0.048915*(predict$sample_type)  + 0.015095*(predict$monthSin) + 0.009090*(predict$age)
+predict.values <- exp(predict.values)
+
+final.predictions <- cbind(actual, predict.values)
+final.predictions$PB_pred <- final.predictions$predict.values
+final.predictions$predict.values <- NULL
+
+final.predictions$Group.1 <- gsub(", St. Joseph County, Indiana", "\\1", final.predictions$Group.1)
+final.predictions$Group.1 <- gsub("Census Tract ", "\\1", final.predictions$Group.1)
+
+final.predictions$Group.1 <- as.numeric(final.predictions$Group.1)
+final.predictions <- final.predictions[order(final.predictions$Group.1),]
+final.predictions$Group.1 <- formatC(final.predictions$Group.1, drop0trailing = TRUE)
+
+mymat <- t(final.predictions[-1])
+colnames(mymat) <- final.predictions[, 1]
+
+barplot(mymat, 
+        xlab="Saint Joseph County Census Tract", 
+        ylab="Blood-lead level (in μg/dL)",
+        col=c("darkblue","red"),
+        las=2,
+        legend = c("Actual Recorded BLL","Model Predicted BLL"), beside=TRUE)
+
+###################
+# MONTH OF SAMPLE 
+final.data.month <- final.data
+final.data.month$PB <- exp(final.data.month$PB)
+
+month.1 <- subset(final.data.month, final.data.month$monthSample==1)
+month.2 <- subset(final.data.month, final.data.month$monthSample==2)
+month.3 <- subset(final.data.month, final.data.month$monthSample==3)
+month.4 <- subset(final.data.month, final.data.month$monthSample==4)
+month.5 <- subset(final.data.month, final.data.month$monthSample==5)
+month.6 <- subset(final.data.month, final.data.month$monthSample==6)
+month.7 <- subset(final.data.month, final.data.month$monthSample==7)
+month.8 <- subset(final.data.month, final.data.month$monthSample==8)
+month.9 <- subset(final.data.month, final.data.month$monthSample==9)
+month.10 <- subset(final.data.month, final.data.month$monthSample==10)
+month.11 <- subset(final.data.month, final.data.month$monthSample==11)
+month.12 <- subset(final.data.month, final.data.month$monthSample==12)
+
+month.1 <- dplyr::select(month.1, PB)
+apply(month.1, 2, sd)/sqrt(1097)
+month.2 <- dplyr::select(month.2, PB)
+apply(month.2, 2, sd)/sqrt(1032)
+month.3 <- dplyr::select(month.3, PB)
+apply(month.3, 2, sd)/sqrt(1128)
+month.4 <- dplyr::select(month.4, PB)
+apply(month.4, 2, sd)/sqrt(1128)
+month.5 <- dplyr::select(month.5, PB)
+apply(month.5, 2, sd)/sqrt(1079)
+month.6 <- dplyr::select(month.6, PB)
+apply(month.6, 2, sd)/sqrt(1001)
+month.7 <- dplyr::select(month.7, PB)
+apply(month.7, 2, sd)/sqrt(945)
+month.8 <- dplyr::select(month.8, PB)
+apply(month.8, 2, sd)/sqrt(1088)
+month.9 <- dplyr::select(month.9, PB)
+apply(month.9, 2, sd)/sqrt(925)
+month.10 <- dplyr::select(month.10, PB)
+apply(month.10, 2, sd)/sqrt(1039)
+month.11 <- dplyr::select(month.11, PB)
+apply(month.11, 2, sd)/sqrt(984)
+month.12 <- dplyr::select(month.12, PB)
+apply(month.12, 2, sd)/sqrt(918)
+
+sd <- c("0.06256604","0.06015711","0.05748698","0.05590206","0.06122711","0.07042957","0.1002156","0.08502799","0.09723521","0.09921511","0.06075161","0.07163001")
+
+final.data.month <- aggregate(PB ~ monthSample, data = final.data.month, FUN = mean, na.remove = F)
+
+month.data <- cbind(final.data.month, sd)
+month.data$sd <- as.numeric(sd)
+
+monthLab <- c("January","February","March","April","May","June","July","August","September","October","November","December")
+
+monthPlot <- ggplot(month.data, aes(x = monthSample, y=PB)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin=PB-sd, max=PB+sd), width=1, position=position_dodge(width=0.7))+
+  scale_x_continuous(labels = monthLab, breaks = round(seq(min(month.data$monthSample), max(month.data$monthSample), by = 1),1)) +
+  labs(x = "Month of Sample", y = "Blood-lead level (in μg/dL)")
+monthPlot
+
+final.age <- exp(final.data$age)
+agePlot <- ggplot(final.data, aes(x = age, y=PB)) +
+  geom_point() +
+  labs(x = "Age of Child", y = "Blood-lead level (in μg/dL)")
+agePlot
+
+################
+# YEAR OF SAMPLE
+
+final.data.year <- final.data
+final.data.year$PB <- exp(final.data.year$PB)
+
+year.05 <- subset(final.data.year, final.data.year$spec_year==1)
+year.06 <- subset(final.data.year, final.data.year$spec_year==2)
+year.07 <- subset(final.data.year, final.data.year$spec_year==3)
+year.08 <- subset(final.data.year, final.data.year$spec_year==4)
+year.09 <- subset(final.data.year, final.data.year$spec_year==5)
+year.10 <- subset(final.data.year, final.data.year$spec_year==6)
+year.11 <- subset(final.data.year, final.data.year$spec_year==7)
+year.12 <- subset(final.data.year, final.data.year$spec_year==8)
+year.13 <- subset(final.data.year, final.data.year$spec_year==9)
+year.14 <- subset(final.data.year, final.data.year$spec_year==10)
+year.15 <- subset(final.data.year, final.data.year$spec_year==11)
+
+year.05 <- dplyr::select(year.05, PB)
+apply(year.05, 2, sd)/sqrt(1255)
+year.06 <- dplyr::select(year.06, PB)
+apply(year.06, 2, sd)/sqrt(967)
+year.07 <- dplyr::select(year.07, PB)
+apply(year.07, 2, sd)/sqrt(733)
+year.08 <- dplyr::select(year.08, PB)
+apply(year.08, 2, sd)/sqrt(674)
+year.09 <- dplyr::select(year.09, PB)
+apply(year.09, 2, sd)/sqrt(736)
+year.10 <- dplyr::select(year.10, PB)
+apply(year.10, 2, sd)/sqrt(942)
+year.11 <- dplyr::select(year.11, PB)
+apply(year.11, 2, sd)/sqrt(2061)
+year.12 <- dplyr::select(year.12, PB)
+apply(year.12, 2, sd)/sqrt(1751)
+year.13 <- dplyr::select(year.13, PB)
+apply(year.13, 2, sd)/sqrt(1626)
+year.14 <- dplyr::select(year.14, PB)
+apply(year.14, 2, sd)/sqrt(1076)
+year.15 <- dplyr::select(year.15, PB)
+apply(year.15, 2, sd)/sqrt(543)
+
+sd <- c("0.07259619","0.1127633","0.1175257","0.07534408","0.09258203","0.08334183","0.04109229","0.04486847","0.04156888","0.07805186","0.09410334")
+
+final.data.year <- aggregate(PB ~ spec_year, data = final.data.year, FUN = mean, na.remove = F)
+
+year.data <- cbind(final.data.year, sd)
+year.data$sd <- as.numeric(sd)
+
+YearLab <- c("2005","2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+  
+yearPlot <- ggplot(year.data, aes(x = spec_year, y=PB)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin=PB-sd, max=PB+sd), width=1, position=position_dodge(width=0.7))+
+  scale_x_continuous(labels = YearLab, breaks = round(seq(min(year.data$spec_year), max(year.data$spec_year), by = 1),1)) +
+  labs(x = "Year of Sample", y = "Blood-lead level (in μg/dL)")
+yearPlot
+
+#################
+# AGE OF CHILDREN
+lead.age <- aggregate(PB ~ age, data = final.data, FUN = mean, na.remove = F)
+lead.age$PB <- lead.age$PB
+
+agePlot <- ggplot(lead.age, aes(x = age, y=PB)) +
+  geom_point() +
+  scale_y_continuous(limits = c(0, 5)) +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(breaks = round(seq(0, 36, by = 3),1)) +
+  labs(x = "Age of Child (in months)", y = "Blood-lead level (in μg/dL)")
+agePlot
+
+################
+# TESTS PER YEAR
+countsYear <- table(final.data$spec_year)
+countsYear <- as.data.frame(countsYear)
+countPlot <- barplot(countsYear,
+        main = "Tests per Year",
+        xlab = "Year",
+        ylab = "Count",
+        names.arg = c("2005","2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015"),
+        col = "darkred",
+        horiz = FALSE,
+        labels = TRUE)
+
+hist(countsYear$Var1,col="gray", labels = TRUE, ylim=c(0, 2500))
+
+####################
+# SAMPLING TEST TYPE
+lead.venous <- subset(final.data, final.data$sample_type==1)
+lead.capp <- subset(final.data, final.data$sample_type==2)
+
+lead.venous <- aggregate(PB ~ spec_year, data = lead.venous, FUN = mean, na.remove = F)
+lead.capp <- aggregate(PB ~ spec_year, data = lead.capp, FUN = mean, na.remove = F)
+
+lead.venous$PB <- exp(lead.venous$PB)
+lead.capp$PB <- exp(lead.capp$PB)
+
+lead.venous$PB_v <- lead.venous$PB
+lead.capp$PB_c <- lead.capp$PB
+
+lead.venous$PB <- NULL
+lead.capp$PB <- NULL
+
+lead.type <- merge(lead.venous,lead.capp,by="spec_year")
+
+YearLab <- c("2005","2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+
+typePlot <- ggplot(lead.type, aes(x = spec_year, group = 11)) +
+  geom_line(aes(y = PB_v, colour = "Venous")) + 
+  geom_line(aes(y = PB_c, colour = "Cappilary"))+
+  labs(x = "Year of Sample", y = "Blood-lead level (in μg/dL)") +
+  scale_x_continuous(labels = YearLab, breaks = round(seq(min(lead.type$spec_year), max(lead.type$spec_year), by = 1),1))
+typePlot
